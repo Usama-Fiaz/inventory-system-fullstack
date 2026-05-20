@@ -18,7 +18,7 @@ const PORT = Number(process.env.PORT || 4000);
 const JWT_SECRET = process.env.JWT_SECRET;
 const ADMIN_ID = process.env.ADMIN_ID || 'admin';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'change_me';
-const CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:3000';
+const CORS_ORIGIN = process.env.CORS_ORIGIN || '';
 const DB_PATH = process.env.DB_PATH || './data/app.db';
 
 if (!process.env.JWT_SECRET) {
@@ -28,9 +28,13 @@ if (!process.env.JWT_SECRET) {
 
 const app = express();
 app.use(helmet());
-const corsOrigin = CORS_ORIGIN.includes(',')
-  ? CORS_ORIGIN.split(',').map((s) => s.trim()).filter(Boolean)
-  : CORS_ORIGIN;
+const corsOrigin = (() => {
+  const raw = String(CORS_ORIGIN || '').trim();
+  if (!raw || raw === '*') return true;
+  return raw.includes(',')
+    ? raw.split(',').map((s) => s.trim()).filter(Boolean)
+    : raw;
+})();
 app.use(cors({ origin: corsOrigin }));
 app.use(express.json({ limit: '1mb' }));
 
