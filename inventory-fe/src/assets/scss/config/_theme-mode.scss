@@ -1,0 +1,115 @@
+// 
+// _theme-mode.scss
+// 
+
+
+/* Root Prefix Variable */
+:root {
+    --#{$prefix}logo-lg-height:                15px;
+    --#{$prefix}logo-sm-height:                24px;
+
+    --#{$prefix}main-nav-width:               260px;
+    --#{$prefix}main-nav-width-sm:             80px; 
+    --#{$prefix}main-nav-item-icon-size:       20px;
+    --#{$prefix}main-nav-item-font-size:       14.5px;
+    --#{$prefix}main-nav-item-padding-x:       18px;
+    --#{$prefix}main-nav-item-padding-y:       11px;
+    --#{$prefix}main-nav-item-margin-y:       4px;
+
+    --#{$prefix}topbar-height:                 70px;
+    --#{$prefix}footer-height:                 36px;
+    
+    // Heading Variable
+    --#{$prefix}headings-color:                 #313b5e;
+
+    --#{$prefix}input-border-color:             #d8dfe7;
+    --#{$prefix}input-focus-border-color:       #b0b0bb;
+}
+
+
+/* Color system - Dark Mode only */
+html[data-bs-theme="dark"],
+[data-bs-theme="dark"] {
+
+    --#{$prefix}body-bg:                        #{$body-bg-dark};
+    --#{$prefix}body-color:                     #{$body-color-dark};
+    --#{$prefix}border-color:                   rgba(255, 255, 255, 0.08);
+
+    --#{$prefix}light:                           #{$body-secondary-bg-dark};
+    --#{$prefix}dark:                            #{$body-tertiary-color-dark};
+    
+    --#{$prefix}light-rgb:                       #{to-rgb($body-secondary-bg-dark)};
+    --#{$prefix}dark-rgb:                        #{to-rgb($body-tertiary-color-dark)};
+
+    // Heading Variable
+    --#{$prefix}headings-color:                  #{$body-emphasis-color-dark};
+
+    // Card Background - aligned with dark body palette
+    --#{$prefix}secondary-bg:                    #{$body-secondary-bg-dark};
+    --#{$prefix}tertiary-bg:                     #{$body-tertiary-bg-dark};
+
+    --#{$prefix}input-border-color:             rgba(255, 255, 255, 0.1);
+    --#{$prefix}input-focus-border-color:       var(--#{$prefix}primary);
+
+    // Page content area - ensure main content matches dark theme
+    .page-content {
+        background-color: #{$body-bg-dark};
+        color: #{$body-color-dark};
+    }
+}
+
+
+/* Main Menu Light */
+html[data-menu-color="light"]{
+    --#{$prefix}main-nav-bg:                               #ffffff;
+    --#{$prefix}main-nav-item-color:                       #5d6b82;
+    --#{$prefix}main-nav-item-hover-bg:                    #f1f5f9;
+    --#{$prefix}main-nav-item-hover-color:                 #0f172a;
+    --#{$prefix}main-nav-border-color:                     #e2e8f0;
+}
+
+
+/* Main Menu Dark */
+html[data-menu-color="dark"] {
+    --#{$prefix}main-nav-bg:                               #0f172a;
+    --#{$prefix}main-nav-item-color:                       #94a3b8;
+    --#{$prefix}main-nav-item-hover-bg:                    #1e293b;
+    --#{$prefix}main-nav-item-hover-color:                 #f8fafc;
+    --#{$prefix}main-nav-border-color:                     #1e293b;
+}
+
+
+/* Main Menu Dark (Dark Mode Only) */
+html[data-bs-theme="dark"][data-menu-color="dark"],
+html[data-bs-theme="dark"][data-menu-color="light"] {
+    --#{$prefix}main-nav-bg:                               #020617;
+    --#{$prefix}main-nav-item-color:                       #94a3b8;
+    --#{$prefix}main-nav-item-hover-bg:                    #0f172a;
+    --#{$prefix}main-nav-item-hover-color:                 #f8fafc;
+    --#{$prefix}main-nav-border-color:                     #0f172a;
+}
+
+
+/* Topbar Light */
+html[data-topbar-color="light"] {
+    --#{$prefix}topbar-bg:                                 #ffffff;
+    --#{$prefix}topbar-item-color:                         #64748b;
+    --#{$prefix}topbar-search-bg:                          #f1f5f9;
+}
+
+
+/* Topbar Dark */
+html[data-topbar-color="dark"] {
+    --#{$prefix}topbar-bg:                                 #020617;
+    --#{$prefix}topbar-item-color:                         #94a3b8;
+    --#{$prefix}topbar-search-bg:                          #0f172a;
+}
+
+
+/* Topbar Dark (Dark Mode Only) */
+html[data-bs-theme="dark"][data-topbar-color="dark"], 
+html[data-bs-theme="dark"][data-topbar-color="light"] {
+    --#{$prefix}topbar-bg:                                 #020617;
+    --#{$prefix}topbar-item-color:                         #cbd5e1;
+    --#{$prefix}topbar-search-bg:                          #0f172a;
+}

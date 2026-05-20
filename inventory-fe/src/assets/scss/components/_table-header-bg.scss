@@ -1,0 +1,53 @@
+// Reusable table header background color + consistent typography
+// Dashboard tables: header 0.875rem (14px), cells 0.8125rem (13px) - same level = same size
+$table-header-font-size: 0.875rem;  // 14px
+$table-cell-font-size: 0.8125rem;   // 13px
+
+.table-header-bg {
+  background: #e5ecf3 !important;
+
+  th {
+    font-size: $table-header-font-size !important;
+    font-weight: 600;
+  }
+}
+
+// Dashboard table cells - consistent font size across all tables
+.table.table-dashboard {
+  thead th {
+    font-size: $table-header-font-size !important;
+    font-weight: 600;
+  }
+
+  tbody td {
+    font-size: $table-cell-font-size !important;
+    line-height: 1.5;
+  }
+
+  // Badges/chips within table rows - consistent size
+  .table-badge,
+  .badge {
+    font-size: 0.75rem !important;
+  }
+
+  // Icons and expanded content - match table cell size
+  .table-expand-icon,
+  .table-status-icon {
+    font-size: 1rem !important;
+  }
+
+  .table-expanded-content {
+    font-size: $table-cell-font-size !important;
+  }
+}
+
+// Dark mode table header
+html[data-bs-theme="dark"] {
+  .table-header-bg {
+    background: #2c3949 !important;
+  }
+
+  .table thead th {
+    color: #e2e8f0 !important;
+  }
+}

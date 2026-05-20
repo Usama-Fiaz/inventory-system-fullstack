@@ -1,0 +1,80 @@
+// Admin dashboard typography: consistent font sizes for titles and subtitles
+// Suggested font families: Inter, DM Sans, Plus Jakarta Sans, IBM Plex Sans
+// Current theme uses Public Sans - titles/subtitles inherit from $headings-font-family
+.admin-dashboard {
+  .card-title,
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--bs-font-sans-serif);
+  }
+  .card-title { font-size: 1.125rem; font-weight: 600; }
+  .page-title { font-size: 1.25rem; font-weight: 600; }
+}
+
+// Analytics page: shrink-wrap the container so the footer
+// sits flush below the content rather than at the viewport bottom.
+.page-content:has(.analytics-compact-page) {
+  min-height: auto;
+}
+.page-content:has(.analytics-compact-page) .container-fluid {
+  flex: none;
+}
+
+.content-none {
+  &:after {
+    display: none !important;
+  }
+
+  &:before {
+    display: none !important;
+  }
+}
+
+.icons-center {
+  display: inline-flex;
+  align-items: center;
+}
+
+.flex-centered{
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+@include media-breakpoint-down(md) {
+  .email-offcanvas {
+    --#{$prefix}offcanvas-width: 100%;
+  }
+}
+
+.email-offcanvas {
+  --#{$prefix}offcanvas-width: 780px;
+}
+
+// Page Transitions (View Transitions API)
+html {
+  scroll-behavior: auto !important;
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 0.4s;
+}
+
+// Fade in-out for the content
+::view-transition-old(root) {
+  animation: fade-out 0.4s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+::view-transition-new(root) {
+  animation: fade-in 0.4s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@keyframes fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}

@@ -1,0 +1,41 @@
+//
+// _footer.scss
+//
+
+.footer {
+    flex-shrink: 0 !important;
+    right: 0;
+    left: 0;
+    margin-top: auto !important;
+    display: flex;
+    align-items: center;
+    padding: 0 calc(#{$spacer} * 0.5);
+    color: var(--#{$prefix}tertiary-color);
+    height: 26px; // slightly smaller
+    font-size: 0.65625rem; // smaller and less prominent
+    background-color: $card-bg;
+    box-shadow: none; // reduce visual noise
+    border-top: 1px solid var(--#{$prefix}border-color); // subtle divider that adapts to theme
+}
+
+.footer-text {
+    color: $text-muted;
+    background: none;
+    -webkit-background-clip: initial;
+    -webkit-text-fill-color: initial;
+    animation: none;
+    display: inline-block;
+}
+
+/* Dark-mode tweak: make footer background transparent and use muted divider and text */
+html[data-bs-theme="dark"] .footer {
+    background-color: transparent;
+    border-top: 1px solid rgba(var(--#{$prefix}dark-rgb), 0.04);
+    color: rgba(var(--#{$prefix}dark-rgb), 0.6);
+}
+
+@keyframes textclip {
+    to {
+        background-position: 200% center;
+    }
+}

@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Satoshi:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <title>Abdullah Store Management System</title>
+  <script>
+    (function() {
+      try {
+        var config = localStorage.getItem('__RASKET_REACT_CONFIG__');
+        if (config) {
+          var parsed = JSON.parse(config);
+          if (parsed.theme === 'dark') {
+            document.documentElement.setAttribute('data-bs-theme', 'dark');
+          }
+        }
+      } catch (e) {}
+    })();
+  </script>
+  <style>
+    #splash-screen {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      background: rgb(255, 255, 255);
+      display: flex;
+      height: 100%;
+      width: 100%;
+      transform: translate(-50%, -50%);
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      opacity: 1;
+      transition: all 15s linear;
+      overflow: hidden;
+    }
+
+    #splash-screen .splash-logo {
+      font-family: 'Satoshi', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-weight: 600;
+      font-size: 2rem;
+      color: rgb(0, 0, 0);
+      letter-spacing: 0.3px;
+    }
+
+    html[data-bs-theme="dark"] #splash-screen {
+      background: #343d48;
+    }
+    html[data-bs-theme="dark"] #splash-screen .splash-logo {
+      color: rgb(255, 255, 255);
+    }
+
+    #splash-screen.remove {
+      animation: fadeout 0.7s forwards;
+      z-index: 0;
+    }
+
+    @keyframes fadeout {
+      to {
+        opacity: 0;
+        visibility: hidden;
+      }
+    }
+  </style>
+
+</head>
+
+<body>
+  <div id="root"></div>
+  <div id="splash-screen">
+    <span class="splash-logo">CoreFense</span>
+  </div>
+  <script type="module" src="/src/main.jsx"></script>
+  <script>
+    const rootEl = document.querySelector('#root')
+    new MutationObserver(() => {
+      document.querySelector('#splash-screen')?.classList.add('remove');
+    }).observe(rootEl, { childList: true });
+  </script>
+</body>
+
+</html>
