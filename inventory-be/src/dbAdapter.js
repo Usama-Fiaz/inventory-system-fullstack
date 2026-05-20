@@ -1,5 +1,11 @@
 const path = require('path');
 
+const dns = require('dns');
+
+if (typeof dns.setDefaultResultOrder === 'function') {
+  dns.setDefaultResultOrder('ipv4first');
+}
+
 const { openDb: openSqliteDb, migrate: migrateSqlite } = require('./db');
 
 function countPlaceholders(sql) {
@@ -34,6 +40,7 @@ function createPostgresAdapter(databaseUrl) {
   const pool = new Pool({
     connectionString: databaseUrl,
     ssl: { rejectUnauthorized: false },
+    family: 4,
   });
 
   async function migrate() {
