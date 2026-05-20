@@ -37,10 +37,17 @@ function normalizeParams(params) {
 function createPostgresAdapter(databaseUrl) {
   const { Pool } = require('pg');
 
+  const lookup = (hostname, options, callback) => {
+    if (typeof options === 'function') {
+      return dns.lookup(hostname, { family: 4 }, options);
+    }
+    return dns.lookup(hostname, { ...(options || {}), family: 4 }, callback);
+  };
+
   const pool = new Pool({
     connectionString: databaseUrl,
     ssl: { rejectUnauthorized: false },
-    family: 4,
+    lookup,
   });
 
   async function migrate() {
