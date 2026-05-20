@@ -11,6 +11,10 @@ export default function InventorySettingsPage() {
   const [file, setFile] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmText, setConfirmText] = useState('');
   const [currency, setCurrency] = useState(getCurrencyCode());
@@ -82,6 +86,40 @@ export default function InventorySettingsPage() {
     setSuccess('Currency updated successfully.');
   };
 
+  const changePassword = async () => {
+    setError(null);
+    setSuccess(null);
+
+    if (!currentPassword || !newPassword) {
+      setError('Please enter your current password and a new password.');
+      return;
+    }
+    if (newPassword.length < 6) {
+      setError('New password must be at least 6 characters.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError('New password and confirm password do not match.');
+      return;
+    }
+
+    setChangingPassword(true);
+    try {
+      await httpClient.post('/api/admin/password/change', {
+        currentPassword,
+        newPassword,
+      });
+      setSuccess('Password updated successfully.');
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (e) {
+      setError(e?.response?.data?.error || 'Failed to update password');
+    } finally {
+      setChangingPassword(false);
+    }
+  };
+
   return (
     <>
       <PageMetaData title="Settings" />
@@ -127,6 +165,62 @@ export default function InventorySettingsPage() {
               <div className="d-flex justify-content-end mt-3">
                 <Button variant="primary" onClick={saveCurrency}>
                   Save
+                </Button>
+              </div>
+            </CardBody>
+          </Card>
+        </Col>
+
+        <Col xs={12}>
+          <Card>
+            <CardBody>
+              <div className="fw-bold">Security</div>
+              <div className="text-muted">Change your admin password.</div>
+
+              <Row className="g-3 mt-1">
+                <Col xs={12} md={4}>
+                  <Form.Group controlId="current-password">
+                    <Form.Label className="fw-semibold">Current password</Form.Label>
+                    <Form.Control
+                      type="password"
+                      value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)}
+                      disabled={changingPassword}
+                      autoComplete="current-password"
+                    />
+                  </Form.Group>
+                </Col>
+
+                <Col xs={12} md={4}>
+                  <Form.Group controlId="new-password">
+                    <Form.Label className="fw-semibold">New password</Form.Label>
+                    <Form.Control
+                      type="password"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      disabled={changingPassword}
+                      autoComplete="new-password"
+                    />
+                  </Form.Group>
+                </Col>
+
+                <Col xs={12} md={4}>
+                  <Form.Group controlId="confirm-password">
+                    <Form.Label className="fw-semibold">Confirm new password</Form.Label>
+                    <Form.Control
+                      type="password"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      disabled={changingPassword}
+                      autoComplete="new-password"
+                    />
+                  </Form.Group>
+                </Col>
+              </Row>
+
+              <div className="d-flex justify-content-end mt-3">
+                <Button variant="primary" onClick={changePassword} disabled={changingPassword}>
+                  {changingPassword ? 'Updating…' : 'Update Password'}
                 </Button>
               </div>
             </CardBody>

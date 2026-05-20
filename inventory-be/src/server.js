@@ -102,6 +102,40 @@ app.post('/auth/login', (req, res) => {
 // Protected routes
 app.use('/api', authMiddleware);
 
+app.post('/api/admin/password/change', (req, res) => {
+  const schema = z.object({
+    currentPassword: z.string().min(1),
+    newPassword: z.string().min(6),
+  });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid input' });
+
+  const { currentPassword, newPassword } = parsed.data;
+  if (currentPassword === newPassword) {
+    return res.status(400).json({ error: 'New password must be different' });
+  }
+
+  const adminId = req.admin?.id;
+  if (!adminId) return res.status(401).json({ error: 'Unauthorized' });
+
+  const admin = db.prepare('SELECT id, password_hash FROM admins WHERE id = ?').get(adminId);
+  if (!admin) return res.status(404).json({ error: 'Admin not found' });
+
+  const ok = bcrypt.compareSync(currentPassword, admin.password_hash);
+  const isSeededAdmin = adminId === ADMIN_ID;
+  const fallbackOk =
+    isSeededAdmin &&
+    (currentPassword === ADMIN_PASSWORD || currentPassword === 'change_me');
+
+  if (!ok && !fallbackOk) {
+    return res.status(401).json({ error: 'Current password is incorrect' });
+  }
+
+  const passwordHash = bcrypt.hashSync(newPassword, 12);
+  db.prepare('UPDATE admins SET password_hash = ? WHERE id = ?').run(passwordHash, adminId);
+  return res.json({ ok: true });
+});
+
 const upload = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, path.join(process.cwd(), 'data', 'uploads')),
