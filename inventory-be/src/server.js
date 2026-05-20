@@ -350,8 +350,9 @@ app.post('/api/dev/seed', async (req, res) => {
       const category = pick(categories);
       const supplier = pick(suppliers);
       const purchasePrice = randFloat(3, 120);
-      const quantity = randInt(8, 120);
       const reorderLevel = randInt(3, 20);
+      const shouldBeLowStock = randInt(1, 100) <= 25;
+      const quantity = shouldBeLowStock ? randInt(0, reorderLevel) : randInt(8, 120);
 
       const itemId = await tx.insertAndGetId(
         `INSERT INTO items
@@ -387,6 +388,38 @@ app.post('/api/dev/seed', async (req, res) => {
             [qty, ts, itemId]
           );
         }
+      }
+    }
+
+    // Add some restocks so Restocks + Insights have meaningful data
+    for (const itemId of insertedIds) {
+      const doRestock = randInt(1, 100) <= 35;
+      if (!doRestock) continue;
+
+      const restockCount = randInt(1, 2);
+      for (let r = 0; r < restockCount; r++) {
+        const item = await tx.queryOne('SELECT id, quantity, purchase_price FROM items WHERE id = ?', [itemId]);
+        if (!item) break;
+
+        const qtyAdded = randInt(5, 60);
+        const unitCost = Number((Number(item.purchase_price) * randFloat(0.9, 1.15, 2)).toFixed(2));
+        const restockedAt = new Date(Date.now() - randInt(0, 30) * 24 * 60 * 60 * 1000);
+        restockedAt.setHours(randInt(8, 19), randInt(0, 59), 0, 0);
+
+        // Weighted average purchase price
+        const oldQty = Number(item.quantity) || 0;
+        const oldPrice = Number(item.purchase_price) || 0;
+        const newQty = oldQty + qtyAdded;
+        const newPrice = newQty > 0 ? (oldQty * oldPrice + qtyAdded * unitCost) / newQty : unitCost;
+
+        await tx.execute(
+          'INSERT INTO restocks (item_id, quantity_added, unit_cost, restocked_at, created_at) VALUES (?, ?, ?, ?, ?)',
+          [itemId, qtyAdded, unitCost, restockedAt.toISOString(), ts]
+        );
+        await tx.execute(
+          'UPDATE items SET quantity = ?, purchase_price = ?, updated_at = ? WHERE id = ?',
+          [newQty, newPrice, ts, itemId]
+        );
       }
     }
   });
