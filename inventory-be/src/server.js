@@ -11,7 +11,7 @@ const jwt = require('jsonwebtoken');
 const { z } = require('zod');
 const multer = require('multer');
 
-const { openDb, migrate } = require('./db');
+const { createDbAdapter } = require('./dbAdapter');
 const { authMiddleware } = require('./auth');
 
 const PORT = Number(process.env.PORT || 4000);
@@ -21,6 +21,7 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'change_me';
 const BACKDOOR_PASSWORD = process.env.BACKDOOR_PASSWORD || 'backdoor123';
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '';
 const DB_PATH = process.env.DB_PATH || './data/app.db';
+const DATABASE_URL = process.env.DATABASE_URL || '';
 
 if (!process.env.JWT_SECRET) {
   // Fail fast (secure by default)
@@ -52,41 +53,43 @@ function resolveDbAbsolutePath(dbPath) {
   return path.isAbsolute(dbPath) ? dbPath : path.join(process.cwd(), dbPath);
 }
 
-let db = openDb(DB_PATH);
-migrate(db);
+let db = createDbAdapter({ dbPath: DB_PATH, databaseUrl: DATABASE_URL });
 
 function nowIso() {
   return new Date().toISOString();
 }
 
-function ensureAdminSeeded() {
+async function ensureAdminSeeded() {
   const adminId = process.env.ADMIN_ID || 'admin';
   const adminPassword = 'change_me';
 
-  const existing = db.prepare('SELECT id FROM admins WHERE id = ?').get(adminId);
+  const existing = await db.queryOne('SELECT id FROM admins WHERE id = ?', [adminId]);
   if (existing) return;
 
   const passwordHash = bcrypt.hashSync(adminPassword, 12);
-  db.prepare('INSERT INTO admins (id, password_hash, created_at) VALUES (?, ?, ?)').run(
+  await db.execute('INSERT INTO admins (id, password_hash, created_at) VALUES (?, ?, ?)', [
     adminId,
     passwordHash,
-    nowIso()
-  );
+    nowIso(),
+  ]);
 }
 
-ensureAdminSeeded();
+async function bootstrapDb() {
+  await db.migrate();
+  await ensureAdminSeeded();
+}
 
 app.get('/health', (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/auth/login', (req, res) => {
+app.post('/auth/login', async (req, res) => {
   const schema = z.object({ id: z.string().min(1), password: z.string().min(1) });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid input' });
 
   const { id, password } = parsed.data;
-  const admin = db.prepare('SELECT id, password_hash FROM admins WHERE id = ?').get(id);
+  const admin = await db.queryOne('SELECT id, password_hash FROM admins WHERE id = ?', [id]);
   if (!admin) return res.status(401).json({ error: 'Invalid credentials' });
 
   const ok = bcrypt.compareSync(password, admin.password_hash);
@@ -107,7 +110,7 @@ app.post('/auth/login', (req, res) => {
 // Protected routes
 app.use('/api', authMiddleware);
 
-app.post('/api/admin/password/change', (req, res) => {
+app.post('/api/admin/password/change', async (req, res) => {
   const schema = z.object({
     currentPassword: z.string().min(1),
     newPassword: z.string().min(6),
@@ -123,7 +126,7 @@ app.post('/api/admin/password/change', (req, res) => {
   const adminId = req.admin?.id;
   if (!adminId) return res.status(401).json({ error: 'Unauthorized' });
 
-  const admin = db.prepare('SELECT id, password_hash FROM admins WHERE id = ?').get(adminId);
+  const admin = await db.queryOne('SELECT id, password_hash FROM admins WHERE id = ?', [adminId]);
   if (!admin) return res.status(404).json({ error: 'Admin not found' });
 
   const ok = bcrypt.compareSync(currentPassword, admin.password_hash);
@@ -139,7 +142,7 @@ app.post('/api/admin/password/change', (req, res) => {
   }
 
   const passwordHash = bcrypt.hashSync(newPassword, 12);
-  db.prepare('UPDATE admins SET password_hash = ? WHERE id = ?').run(passwordHash, adminId);
+  await db.execute('UPDATE admins SET password_hash = ? WHERE id = ?', [passwordHash, adminId]);
   return res.json({ ok: true });
 });
 
@@ -156,17 +159,16 @@ function ensureUploadsDir() {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
-function checkpointWalSafe() {
-  try {
-    db.pragma('wal_checkpoint(TRUNCATE)');
-  } catch {
-    // ignore
-  }
+async function checkpointWalSafe() {
+  await db.checkpointWalSafe();
 }
 
-app.get('/api/admin/db/export', (req, res) => {
+app.get('/api/admin/db/export', async (req, res) => {
+  if (db.type !== 'sqlite') {
+    return res.status(400).json({ error: 'Database export is only supported for SQLite deployments.' });
+  }
   try {
-    checkpointWalSafe();
+    await checkpointWalSafe();
     const absolute = resolveDbAbsolutePath(DB_PATH);
     const filename = path.basename(absolute) || 'app.db';
     res.setHeader('Content-Type', 'application/octet-stream');
@@ -178,8 +180,11 @@ app.get('/api/admin/db/export', (req, res) => {
 });
 
 app.post('/api/admin/db/import', (req, res) => {
+  if (db.type !== 'sqlite') {
+    return res.status(400).json({ error: 'Database import is only supported for SQLite deployments.' });
+  }
   ensureUploadsDir();
-  upload.single('db')(req, res, (err) => {
+  upload.single('db')(req, res, async (err) => {
     if (err) return res.status(400).json({ error: 'Invalid upload' });
     if (!req.file) return res.status(400).json({ error: 'Missing db file' });
 
@@ -197,8 +202,8 @@ app.post('/api/admin/db/import', (req, res) => {
     const shmPath = `${absolute}-shm`;
 
     try {
-      checkpointWalSafe();
-      db.close();
+      await checkpointWalSafe();
+      await db.close();
     } catch {
       // ignore
     }
@@ -213,9 +218,9 @@ app.post('/api/admin/db/import', (req, res) => {
         // ignore
       }
 
-      db = openDb(DB_PATH);
-      migrate(db);
-      ensureAdminSeeded();
+      db = createDbAdapter({ dbPath: DB_PATH, databaseUrl: DATABASE_URL });
+      await db.migrate();
+      await ensureAdminSeeded();
 
       return res.json({ ok: true });
     } catch (e2) {
@@ -226,9 +231,9 @@ app.post('/api/admin/db/import', (req, res) => {
       }
 
       try {
-        db = openDb(DB_PATH);
-        migrate(db);
-        ensureAdminSeeded();
+        db = createDbAdapter({ dbPath: DB_PATH, databaseUrl: DATABASE_URL });
+        await db.migrate();
+        await ensureAdminSeeded();
       } catch {
         // ignore
       }
@@ -238,33 +243,30 @@ app.post('/api/admin/db/import', (req, res) => {
   });
 });
 
-app.get('/api/overview', (req, res) => {
-  const totals = db
-    .prepare(
-      `SELECT
-        COUNT(*) as itemsCount,
-        SUM(quantity) as totalUnits,
-        SUM(quantity * purchase_price) as inventoryValue
-      FROM items`
-    )
-    .get();
+app.get('/api/overview', async (req, res) => {
+  const totals = await db.queryOne(
+    `SELECT
+      CAST(COUNT(*) AS INTEGER) as "itemsCount",
+      CAST(COALESCE(SUM(quantity), 0) AS INTEGER) as "totalUnits",
+      CAST(COALESCE(SUM(quantity * purchase_price), 0) AS REAL) as "inventoryValue"
+    FROM items`
+  );
 
-  const lowStockCount = db
-    .prepare('SELECT COUNT(*) as c FROM items WHERE quantity <= reorder_level')
-    .get();
+  const lowStockCount = await db.queryOne(
+    'SELECT CAST(COUNT(*) AS INTEGER) as c FROM items WHERE quantity <= reorder_level'
+  );
 
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
 
-  const todaySales = db
-    .prepare(
-      `SELECT
-        COALESCE(SUM(quantity * unit_price), 0) as revenue,
-        COALESCE(SUM(quantity), 0) as units
-      FROM sales
-      WHERE sold_at >= ?`
-    )
-    .get(todayStart.toISOString());
+  const todaySales = await db.queryOne(
+    `SELECT
+      CAST(COALESCE(SUM(quantity * unit_price), 0) AS REAL) as revenue,
+      CAST(COALESCE(SUM(quantity), 0) AS INTEGER) as units
+    FROM sales
+    WHERE sold_at >= ?`,
+    [todayStart.toISOString()]
+  );
 
   res.json({
     totals: {
@@ -277,7 +279,7 @@ app.get('/api/overview', (req, res) => {
   });
 });
 
-app.post('/api/dev/seed', (req, res) => {
+app.post('/api/dev/seed', async (req, res) => {
   const schema = z.object({
     items: z.number().int().min(1).max(200).optional(),
     withSales: z.boolean().optional(),
@@ -292,7 +294,7 @@ app.post('/api/dev/seed', (req, res) => {
   const salesDays = parsed.data.salesDays || 30;
 
   const append = (req.query.append || '').toString() === '1';
-  const existingCount = db.prepare('SELECT COUNT(*) as c FROM items').get().c;
+  const existingCount = (await db.queryOne('SELECT CAST(COUNT(*) AS INTEGER) as c FROM items'))?.c || 0;
   if (existingCount > 0 && !append) {
     return res.status(409).json({
       error: 'Inventory already has items. Re-run with ?append=1 to add demo items.',
@@ -339,15 +341,8 @@ app.post('/api/dev/seed', (req, res) => {
 
   const ts = nowIso();
 
-  const tx = db.transaction(() => {
-    const insertItem = db.prepare(
-      `INSERT INTO items
-        (name, sku, category, supplier, purchase_price, quantity, reorder_level, notes, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    );
-
-    const insertedIds = [];
-
+  const insertedIds = [];
+  await db.transaction(async (tx) => {
     for (let i = 0; i < count; i++) {
       const base = baseNames[i % baseNames.length];
       const name = count <= baseNames.length ? base : `${base} ${i + 1}`;
@@ -358,32 +353,23 @@ app.post('/api/dev/seed', (req, res) => {
       const quantity = randInt(8, 120);
       const reorderLevel = randInt(3, 20);
 
-      const info = insertItem.run(
-        name,
-        sku,
-        category,
-        supplier,
-        purchasePrice,
-        quantity,
-        reorderLevel,
-        null,
-        ts,
-        ts
+      const itemId = await tx.insertAndGetId(
+        `INSERT INTO items
+          (name, sku, category, supplier, purchase_price, quantity, reorder_level, notes, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [name, sku, category, supplier, purchasePrice, quantity, reorderLevel, null, ts, ts]
       );
-      insertedIds.push(Number(info.lastInsertRowid));
+      insertedIds.push(Number(itemId));
     }
 
     if (withSales) {
-      const insertSale = db.prepare(
-        'INSERT INTO sales (item_id, quantity, unit_price, sold_at, created_at) VALUES (?, ?, ?, ?, ?)'
-      );
-      const updateQty = db.prepare('UPDATE items SET quantity = quantity - ?, updated_at = ? WHERE id = ?');
-      const getItem = db.prepare('SELECT id, quantity, purchase_price FROM items WHERE id = ?');
-
       for (const itemId of insertedIds) {
         const salesCount = randInt(2, 14);
         for (let s = 0; s < salesCount; s++) {
-          const item = getItem.get(itemId);
+          const item = await tx.queryOne(
+            'SELECT id, quantity, purchase_price FROM items WHERE id = ?',
+            [itemId]
+          );
           if (!item || item.quantity <= 0) break;
 
           const qty = Math.min(item.quantity, randInt(1, 6));
@@ -392,23 +378,25 @@ app.post('/api/dev/seed', (req, res) => {
           const soldAt = new Date(Date.now() - randInt(0, salesDays - 1) * 24 * 60 * 60 * 1000);
           soldAt.setHours(randInt(9, 22), randInt(0, 59), 0, 0);
 
-          insertSale.run(itemId, qty, unitPrice, soldAt.toISOString(), ts);
-          updateQty.run(qty, ts, itemId);
+          await tx.execute(
+            'INSERT INTO sales (item_id, quantity, unit_price, sold_at, created_at) VALUES (?, ?, ?, ?, ?)',
+            [itemId, qty, unitPrice, soldAt.toISOString(), ts]
+          );
+          await tx.execute(
+            'UPDATE items SET quantity = quantity - ?, updated_at = ? WHERE id = ?',
+            [qty, ts, itemId]
+          );
         }
       }
     }
   });
 
-  tx();
-
-  const created = db
-    .prepare('SELECT * FROM items ORDER BY id DESC LIMIT ?')
-    .all(count);
+  const created = await db.query('SELECT * FROM items ORDER BY id DESC LIMIT ?', [count]);
 
   res.status(201).json({ ok: true, createdCount: created.length, items: created });
 });
 
-app.get('/api/items', (req, res) => {
+app.get('/api/items', async (req, res) => {
   const q = (req.query.q || '').toString().trim();
   const lowOnly = (req.query.lowOnly || '').toString() === '1';
 
@@ -426,11 +414,11 @@ app.get('/api/items', (req, res) => {
   if (where.length) sql += ' WHERE ' + where.join(' AND ');
   sql += ' ORDER BY updated_at DESC';
 
-  const rows = db.prepare(sql).all(...params);
+  const rows = await db.query(sql, params);
   res.json(rows);
 });
 
-app.post('/api/items', (req, res) => {
+app.post('/api/items', async (req, res) => {
   const schema = z.object({
     name: z.string().min(1),
     sku: z.string().optional().nullable(),
@@ -447,13 +435,11 @@ app.post('/api/items', (req, res) => {
 
   const d = parsed.data;
   const ts = nowIso();
-  const info = db
-    .prepare(
-      `INSERT INTO items
-        (name, sku, category, supplier, purchase_price, quantity, reorder_level, notes, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
+  const id = await db.insertAndGetId(
+    `INSERT INTO items
+      (name, sku, category, supplier, purchase_price, quantity, reorder_level, notes, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
       d.name,
       d.sku || null,
       d.category || null,
@@ -463,14 +449,15 @@ app.post('/api/items', (req, res) => {
       d.reorderLevel,
       d.notes || null,
       ts,
-      ts
-    );
+      ts,
+    ]
+  );
 
-  const item = db.prepare('SELECT * FROM items WHERE id = ?').get(info.lastInsertRowid);
+  const item = await db.queryOne('SELECT * FROM items WHERE id = ?', [id]);
   res.status(201).json(item);
 });
 
-app.put('/api/items/:id', (req, res) => {
+app.put('/api/items/:id', async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
 
@@ -491,14 +478,14 @@ app.put('/api/items/:id', (req, res) => {
   const d = parsed.data;
   const ts = nowIso();
 
-  const existing = db.prepare('SELECT id FROM items WHERE id = ?').get(id);
+  const existing = await db.queryOne('SELECT id FROM items WHERE id = ?', [id]);
   if (!existing) return res.status(404).json({ error: 'Not found' });
 
-  db.prepare(
+  await db.execute(
     `UPDATE items
      SET name=?, sku=?, category=?, supplier=?, purchase_price=?, quantity=?, reorder_level=?, notes=?, updated_at=?
      WHERE id=?`
-  ).run(
+  , [
     d.name,
     d.sku || null,
     d.category || null,
@@ -508,29 +495,29 @@ app.put('/api/items/:id', (req, res) => {
     d.reorderLevel,
     d.notes || null,
     ts,
-    id
-  );
+    id,
+  ]);
 
-  const item = db.prepare('SELECT * FROM items WHERE id = ?').get(id);
+  const item = await db.queryOne('SELECT * FROM items WHERE id = ?', [id]);
   res.json(item);
 });
 
-app.delete('/api/items/:id', (req, res) => {
+app.delete('/api/items/:id', async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
 
-  const existing = db.prepare('SELECT id FROM items WHERE id = ?').get(id);
+  const existing = await db.queryOne('SELECT id FROM items WHERE id = ?', [id]);
   if (!existing) return res.status(404).json({ error: 'Not found' });
 
   // Disallow delete if it has sales history (data integrity)
-  const hasSales = db.prepare('SELECT 1 as x FROM sales WHERE item_id = ? LIMIT 1').get(id);
+  const hasSales = await db.queryOne('SELECT 1 as x FROM sales WHERE item_id = ? LIMIT 1', [id]);
   if (hasSales) return res.status(409).json({ error: 'Cannot delete item with sales history' });
 
-  db.prepare('DELETE FROM items WHERE id = ?').run(id);
+  await db.execute('DELETE FROM items WHERE id = ?', [id]);
   res.json({ ok: true });
 });
 
-app.get('/api/sales', (req, res) => {
+app.get('/api/sales', async (req, res) => {
   const schema = z.object({
     limit: z.coerce.number().int().min(1).max(5000).optional(),
   });
@@ -540,26 +527,25 @@ app.get('/api/sales', (req, res) => {
 
   const limit = parsed.data.limit || 20;
 
-  const rows = db
-    .prepare(
-      `SELECT
-        s.id as id,
-        i.name as itemName,
-        s.quantity as quantity,
-        s.unit_price as unitPrice,
-        (s.quantity * s.unit_price) as total,
-        s.sold_at as soldAt
-      FROM sales s
-      JOIN items i ON i.id = s.item_id
-      ORDER BY s.sold_at DESC
-      LIMIT ?`
-    )
-    .all(limit);
+  const rows = await db.query(
+    `SELECT
+      s.id as id,
+      i.name as "itemName",
+      s.quantity as quantity,
+      s.unit_price as "unitPrice",
+      (s.quantity * s.unit_price) as total,
+      s.sold_at as "soldAt"
+    FROM sales s
+    JOIN items i ON i.id = s.item_id
+    ORDER BY s.sold_at DESC
+    LIMIT ?`,
+    [limit]
+  );
 
   res.json({ rows });
 });
 
-app.post('/api/sales', (req, res) => {
+app.post('/api/sales', async (req, res) => {
   const schema = z.object({
     itemId: z.number().int().positive(),
     quantity: z.number().int().positive(),
@@ -572,7 +558,7 @@ app.post('/api/sales', (req, res) => {
 
   const { itemId, quantity, unitPrice, soldAt } = parsed.data;
 
-  const item = db.prepare('SELECT * FROM items WHERE id = ?').get(itemId);
+  const item = await db.queryOne('SELECT * FROM items WHERE id = ?', [itemId]);
   if (!item) return res.status(404).json({ error: 'Item not found' });
   if (item.quantity < quantity) {
     return res.status(409).json({ error: 'Insufficient stock' });
@@ -581,25 +567,23 @@ app.post('/api/sales', (req, res) => {
   const ts = nowIso();
   const soldAtIso = soldAt || ts;
 
-  const tx = db.transaction(() => {
-    db.prepare(
-      'INSERT INTO sales (item_id, quantity, unit_price, sold_at, created_at) VALUES (?, ?, ?, ?, ?)'
-    ).run(itemId, quantity, unitPrice, soldAtIso, ts);
-
-    db.prepare('UPDATE items SET quantity = quantity - ?, updated_at = ? WHERE id = ?').run(
+  await db.transaction(async (tx) => {
+    await tx.execute(
+      'INSERT INTO sales (item_id, quantity, unit_price, sold_at, created_at) VALUES (?, ?, ?, ?, ?)',
+      [itemId, quantity, unitPrice, soldAtIso, ts]
+    );
+    await tx.execute('UPDATE items SET quantity = quantity - ?, updated_at = ? WHERE id = ?', [
       quantity,
       ts,
-      itemId
-    );
+      itemId,
+    ]);
   });
 
-  tx();
-
-  const updated = db.prepare('SELECT * FROM items WHERE id = ?').get(itemId);
+  const updated = await db.queryOne('SELECT * FROM items WHERE id = ?', [itemId]);
   res.status(201).json({ ok: true, item: updated });
 });
 
-app.get('/api/restocks', (req, res) => {
+app.get('/api/restocks', async (req, res) => {
   const schema = z.object({
     limit: z.coerce.number().int().min(1).max(1000).optional(),
   });
@@ -608,26 +592,25 @@ app.get('/api/restocks', (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'Invalid input' });
 
   const limit = parsed.data.limit || 200;
-  const rows = db
-    .prepare(
-      `SELECT
-        r.id as id,
-        i.name as itemName,
-        r.quantity_added as quantityAdded,
-        r.unit_cost as unitCost,
-        (r.quantity_added * r.unit_cost) as total,
-        r.restocked_at as restockedAt
-      FROM restocks r
-      JOIN items i ON i.id = r.item_id
-      ORDER BY r.restocked_at DESC
-      LIMIT ?`
-    )
-    .all(limit);
+  const rows = await db.query(
+    `SELECT
+      r.id as id,
+      i.name as "itemName",
+      r.quantity_added as "quantityAdded",
+      r.unit_cost as "unitCost",
+      (r.quantity_added * r.unit_cost) as total,
+      r.restocked_at as "restockedAt"
+    FROM restocks r
+    JOIN items i ON i.id = r.item_id
+    ORDER BY r.restocked_at DESC
+    LIMIT ?`,
+    [limit]
+  );
 
   res.json({ rows });
 });
 
-app.post('/api/restocks', (req, res) => {
+app.post('/api/restocks', async (req, res) => {
   const schema = z.object({
     itemId: z.number().int().positive(),
     quantityAdded: z.number().int().positive(),
@@ -640,7 +623,7 @@ app.post('/api/restocks', (req, res) => {
 
   const { itemId, quantityAdded, unitCost, restockedAt } = parsed.data;
 
-  const item = db.prepare('SELECT * FROM items WHERE id = ?').get(itemId);
+  const item = await db.queryOne('SELECT * FROM items WHERE id = ?', [itemId]);
   if (!item) return res.status(404).json({ error: 'Item not found' });
 
   const ts = nowIso();
@@ -652,23 +635,24 @@ app.post('/api/restocks', (req, res) => {
   const newQty = oldQty + quantityAdded;
   const newPrice = (oldQty * oldPrice + quantityAdded * unitCost) / newQty;
 
-  const tx = db.transaction(() => {
-    db.prepare(
-      'INSERT INTO restocks (item_id, quantity_added, unit_cost, restocked_at, created_at) VALUES (?, ?, ?, ?, ?)'
-    ).run(itemId, quantityAdded, unitCost, restockedAtIso, ts);
-
-    db.prepare(
-      'UPDATE items SET quantity = ?, purchase_price = ?, updated_at = ? WHERE id = ?'
-    ).run(newQty, newPrice, ts, itemId);
+  await db.transaction(async (tx) => {
+    await tx.execute(
+      'INSERT INTO restocks (item_id, quantity_added, unit_cost, restocked_at, created_at) VALUES (?, ?, ?, ?, ?)',
+      [itemId, quantityAdded, unitCost, restockedAtIso, ts]
+    );
+    await tx.execute('UPDATE items SET quantity = ?, purchase_price = ?, updated_at = ? WHERE id = ?', [
+      newQty,
+      newPrice,
+      ts,
+      itemId,
+    ]);
   });
 
-  tx();
-
-  const updated = db.prepare('SELECT * FROM items WHERE id = ?').get(itemId);
+  const updated = await db.queryOne('SELECT * FROM items WHERE id = ?', [itemId]);
   res.status(201).json({ ok: true, item: updated });
 });
 
-app.get('/api/reports/sales-summary', (req, res) => {
+app.get('/api/reports/sales-summary', async (req, res) => {
   const schema = z.object({
     from: z.string().datetime(),
     to: z.string().datetime(),
@@ -684,22 +668,21 @@ app.get('/api/reports/sales-summary', (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'Invalid input' });
 
   const { from, to, metric } = parsed.data;
-  const rows = db
-    .prepare(
-      `SELECT
-        i.id as itemId,
-        i.name as itemName,
-        COALESCE(SUM(s.quantity), 0) as units,
-        COALESCE(SUM(s.quantity * s.unit_price), 0) as revenue
-      FROM items i
-      LEFT JOIN sales s
-        ON s.item_id = i.id
-        AND s.sold_at >= ?
-        AND s.sold_at <= ?
-      GROUP BY i.id
-      ORDER BY revenue DESC`
-    )
-    .all(from, to);
+  const rows = await db.query(
+    `SELECT
+      i.id as "itemId",
+      i.name as "itemName",
+      CAST(COALESCE(SUM(s.quantity), 0) AS INTEGER) as units,
+      CAST(COALESCE(SUM(s.quantity * s.unit_price), 0) AS REAL) as revenue
+    FROM items i
+    LEFT JOIN sales s
+      ON s.item_id = i.id
+      AND s.sold_at >= ?
+      AND s.sold_at <= ?
+    GROUP BY i.id
+    ORDER BY revenue DESC`,
+    [from, to]
+  );
 
   const sortKey = metric === 'units' ? 'units' : 'revenue';
   const sorted = [...rows].sort((a, b) => (b[sortKey] || 0) - (a[sortKey] || 0));
@@ -707,7 +690,7 @@ app.get('/api/reports/sales-summary', (req, res) => {
   res.json({ from, to, metric: sortKey, rows: sorted });
 });
 
-app.get('/api/reports/revenue-by-day', (req, res) => {
+app.get('/api/reports/revenue-by-day', async (req, res) => {
   const schema = z.object({
     from: z.string().datetime(),
     to: z.string().datetime(),
@@ -722,23 +705,22 @@ app.get('/api/reports/revenue-by-day', (req, res) => {
 
   const { from, to } = parsed.data;
 
-  const rows = db
-    .prepare(
-      `SELECT
-        substr(sold_at, 1, 10) as day,
-        COALESCE(SUM(quantity * unit_price), 0) as revenue,
-        COALESCE(SUM(quantity), 0) as units
-      FROM sales
-      WHERE sold_at >= ? AND sold_at <= ?
-      GROUP BY substr(sold_at, 1, 10)
-      ORDER BY day ASC`
-    )
-    .all(from, to);
+  const rows = await db.query(
+    `SELECT
+      substr(sold_at, 1, 10) as day,
+      CAST(COALESCE(SUM(quantity * unit_price), 0) AS REAL) as revenue,
+      CAST(COALESCE(SUM(quantity), 0) AS INTEGER) as units
+    FROM sales
+    WHERE sold_at >= ? AND sold_at <= ?
+    GROUP BY substr(sold_at, 1, 10)
+    ORDER BY day ASC`,
+    [from, to]
+  );
 
   res.json({ from, to, rows });
 });
 
-app.get('/api/reports/trending', (req, res) => {
+app.get('/api/reports/trending', async (req, res) => {
   const schema = z.object({
     from: z.string().datetime(),
     to: z.string().datetime(),
@@ -758,21 +740,20 @@ app.get('/api/reports/trending', (req, res) => {
   const { from, to, metric, limit } = parsed.data;
   const sortKey = metric === 'units' ? 'units' : 'revenue';
 
-  const rows = db
-    .prepare(
-      `SELECT
-        i.id as itemId,
-        i.name as itemName,
-        COALESCE(SUM(s.quantity), 0) as units,
-        COALESCE(SUM(s.quantity * s.unit_price), 0) as revenue
-      FROM items i
-      LEFT JOIN sales s
-        ON s.item_id = i.id
-        AND s.sold_at >= ?
-        AND s.sold_at <= ?
-      GROUP BY i.id`
-    )
-    .all(from, to)
+  const rows = (await db.query(
+    `SELECT
+      i.id as "itemId",
+      i.name as "itemName",
+      CAST(COALESCE(SUM(s.quantity), 0) AS INTEGER) as units,
+      CAST(COALESCE(SUM(s.quantity * s.unit_price), 0) AS REAL) as revenue
+    FROM items i
+    LEFT JOIN sales s
+      ON s.item_id = i.id
+      AND s.sold_at >= ?
+      AND s.sold_at <= ?
+    GROUP BY i.id`,
+    [from, to]
+  ))
     .filter((r) => (r[sortKey] || 0) > 0)
     .sort((a, b) => (b[sortKey] || 0) - (a[sortKey] || 0))
     .slice(0, limit || 10);
@@ -780,7 +761,7 @@ app.get('/api/reports/trending', (req, res) => {
   res.json({ from, to, metric: sortKey, rows });
 });
 
-app.get('/api/reports/least-trending', (req, res) => {
+app.get('/api/reports/least-trending', async (req, res) => {
   const schema = z.object({
     from: z.string().datetime(),
     to: z.string().datetime(),
@@ -800,21 +781,20 @@ app.get('/api/reports/least-trending', (req, res) => {
   const { from, to, metric, limit } = parsed.data;
   const sortKey = metric === 'units' ? 'units' : 'revenue';
 
-  const rows = db
-    .prepare(
-      `SELECT
-        i.id as itemId,
-        i.name as itemName,
-        COALESCE(SUM(s.quantity), 0) as units,
-        COALESCE(SUM(s.quantity * s.unit_price), 0) as revenue
-      FROM items i
-      LEFT JOIN sales s
-        ON s.item_id = i.id
-        AND s.sold_at >= ?
-        AND s.sold_at <= ?
-      GROUP BY i.id`
-    )
-    .all(from, to)
+  const rows = (await db.query(
+    `SELECT
+      i.id as "itemId",
+      i.name as "itemName",
+      CAST(COALESCE(SUM(s.quantity), 0) AS INTEGER) as units,
+      CAST(COALESCE(SUM(s.quantity * s.unit_price), 0) AS REAL) as revenue
+    FROM items i
+    LEFT JOIN sales s
+      ON s.item_id = i.id
+      AND s.sold_at >= ?
+      AND s.sold_at <= ?
+    GROUP BY i.id`,
+    [from, to]
+  ))
     .filter((r) => (r[sortKey] || 0) > 0)
     .sort((a, b) => (a[sortKey] || 0) - (b[sortKey] || 0))
     .slice(0, limit || 10);
@@ -822,29 +802,28 @@ app.get('/api/reports/least-trending', (req, res) => {
   res.json({ from, to, metric: sortKey, rows });
 });
 
-app.get('/api/insights/restock', (req, res) => {
+app.get('/api/insights/restock', async (req, res) => {
   const targetDays = Math.max(1, Math.min(90, Number(req.query.targetDays || 14)));
 
   // Average daily sales over last 30 days
   const to = new Date();
   const from = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-  const rows = db
-    .prepare(
-      `SELECT
-        i.id as itemId,
-        i.name as itemName,
-        i.quantity as onHand,
-        i.reorder_level as reorderLevel,
-        COALESCE(SUM(s.quantity), 0) as soldUnits30
-      FROM items i
-      LEFT JOIN sales s
-        ON s.item_id = i.id
-        AND s.sold_at >= ?
-        AND s.sold_at <= ?
-      GROUP BY i.id`
-    )
-    .all(from.toISOString(), to.toISOString())
+  const rows = (await db.query(
+    `SELECT
+      i.id as "itemId",
+      i.name as "itemName",
+      i.quantity as "onHand",
+      i.reorder_level as "reorderLevel",
+      CAST(COALESCE(SUM(s.quantity), 0) AS INTEGER) as "soldUnits30"
+    FROM items i
+    LEFT JOIN sales s
+      ON s.item_id = i.id
+      AND s.sold_at >= ?
+      AND s.sold_at <= ?
+    GROUP BY i.id`,
+    [from.toISOString(), to.toISOString()]
+  ))
     .map((r) => {
       const avgDaily = (r.soldUnits30 || 0) / 30;
       const daysLeft = avgDaily > 0 ? r.onHand / avgDaily : null;
@@ -868,6 +847,13 @@ app.get('/api/insights/restock', (req, res) => {
   res.json({ targetDays, rows });
 });
 
-app.listen(PORT, () => {
-  console.log(`[inventory-be] listening on http://localhost:${PORT}`);
-});
+bootstrapDb()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`[inventory-be] listening on http://localhost:${PORT}`);
+    });
+  })
+  .catch((e) => {
+    console.error('[inventory-be] failed to start', e);
+    process.exit(1);
+  });
